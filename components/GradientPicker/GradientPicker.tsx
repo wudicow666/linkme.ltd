@@ -99,7 +99,7 @@ export function GradientPicker({ stops, onChange, className }: GradientPickerPro
                     disabled={stops.length >= 5}
                 >
                     <Plus className="w-4 h-4 mr-2" />
-                    Add Color Stop
+                    添加色标
                 </Button>
                 {selectedStop !== null && (
                     <div className="flex items-center gap-2">

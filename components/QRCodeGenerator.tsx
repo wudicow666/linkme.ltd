@@ -1,5 +1,20 @@
 import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode-generator';
+import { downloadFile, downloadResultMessage } from '@/lib/downloadFile';
+import { exportManualShellComposite } from '@/lib/exportManualShell';
+import {
+    cloneSvgForExport,
+    svgElementToDataUrl,
+} from '@/lib/qrRasterize';
+import {
+    DEFAULT_SHELL_OVERLAY,
+    type ShellOverlayText,
+} from '@/lib/shellOverlayText';
+import {
+    NO_TEMPLATE,
+    SHELL_TEMPLATES,
+    getShellTemplate,
+} from '@/lib/shellTemplates';
 
 // UI components (adjust import paths as needed)
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -20,10 +35,13 @@ import {
     Download,
     Grid,
     Save,
+    LayoutTemplate,
 } from 'lucide-react';
 
-// Import your custom CircularQRCode component
 import CircularQRCode from './CircularQRCode';
+import TemplateManualComposer, {
+    type ManualShellTransform,
+} from './TemplateManualComposer';
 
 // -----------------------------
 //  TYPE DEFINITIONS
@@ -128,6 +146,16 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     const [moduleCount, setModuleCount] = useState<number | null>(null);
     const [qrcode, setQrcode] = useState<any>(null);
 
+    const [shellTemplateId, setShellTemplateId] = useState<string>(NO_TEMPLATE);
+    const [shellTransform, setShellTransform] = useState<ManualShellTransform>({
+        qrX: 371,
+        qrY: 358,
+        qrDiameter: 324,
+    });
+    const [shellOverlay, setShellOverlay] = useState<ShellOverlayText>({
+        ...DEFAULT_SHELL_OVERLAY,
+    });
+
     // Export options
     const [exportResolution, setExportResolution] = useState(1024);
     const [exportFormat, setExportFormat] = useState<'png' | 'webp' | 'svg'>('png');
@@ -165,6 +193,19 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     const [barsRadiusOffset, setBarsRadiusOffset] = useState(20);
 
     const svgRef = useRef<SVGSVGElement>(null);
+    const previewSvgRef = useRef<SVGSVGElement>(null);
+    const QR_CANVAS_SIZE = 700;
+
+    useEffect(() => {
+        const tpl = getShellTemplate(shellTemplateId);
+        if (tpl) {
+            setShellTransform({
+                qrX: tpl.defaultQrX,
+                qrY: tpl.defaultQrY,
+                qrDiameter: tpl.defaultQrDiameter,
+            });
+        }
+    }, [shellTemplateId]);
 
     // -----------------------------
     //  EFFECTS
@@ -355,12 +396,19 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
         onSave(designData);
     };
 
-    const handleExport = () => {
-        if (!svgRef.current) return;
+    const handleExport = async () => {
+        if (!svgRef.current) {
+            alert('请先生成二维码（输入链接并等待预览出现）');
+            return;
+        }
 
-        const svgElement = svgRef.current.cloneNode(true) as SVGSVGElement;
+        const shell =
+            shellTemplateId !== NO_TEMPLATE
+                ? getShellTemplate(shellTemplateId)
+                : undefined;
 
-        // If exporting to SVG, remove any <image> tags to avoid embedding
+        let svgElement = cloneSvgForExport(svgRef.current, exportComponent);
+
         if (exportFormat === 'svg') {
             const images = svgElement.getElementsByTagName('image');
             while (images.length > 0) {
@@ -368,64 +416,125 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             }
         }
 
-        // Depending on exportComponent, remove undesired elements
-        if (exportComponent !== 'full') {
-            if (exportComponent === 'foreground') {
-                const backgroundElements = svgElement.querySelectorAll(
-                    '.backgroundRects, .circle-background, .borderText'
+        const svgString = new XMLSerializer().serializeToString(svgElement);
+
+        if (shell && exportFormat !== 'svg') {
+            try {
+                const qrUrl = await svgElementToDataUrl(
+                    cloneSvgForExport(svgRef.current, 'full'),
+                    1024,
+                    'png',
                 );
-                backgroundElements.forEach((el) => el.parentNode?.removeChild(el));
-                const overlayImage = svgElement.querySelector('.overlayImage');
-                if (overlayImage) {
-                    overlayImage.parentNode?.removeChild(overlayImage);
-                }
-            } else if (exportComponent === 'background') {
-                const qrElements = svgElement.querySelectorAll(
-                    '.qrcode, .finderPatterns, .qrRects, .overlayImage, .finderBars'
+                const composed = await exportManualShellComposite(
+                    shell,
+                    qrUrl,
+                    shellTransform.qrX,
+                    shellTransform.qrY,
+                    shellTransform.qrDiameter,
+                    { overlay: shellOverlay },
                 );
-                qrElements.forEach((el) => el.parentNode?.removeChild(el));
+                const result = await downloadFile(composed, `qrcode-${shell.id}.png`);
+                alert(downloadResultMessage(result, '海报已保存'));
+            } catch (e) {
+                console.error(e);
+                alert(e instanceof Error ? e.message : '模板导出失败');
             }
+            return;
         }
 
-        const serializer = new XMLSerializer();
-        const svgString = serializer.serializeToString(svgElement);
-
         if (exportFormat === 'svg') {
+            if (shell) {
+                alert('使用模板时请导出 PNG');
+                return;
+            }
             const blob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
             const url = URL.createObjectURL(blob);
-            downloadURI(url, 'qrcode.svg');
+            const result = await downloadFile(url, 'qrcode.svg');
             URL.revokeObjectURL(url);
-        } else {
-            const img = new Image();
-            const canvas = document.createElement('canvas');
-            canvas.width = exportResolution;
-            canvas.height = exportResolution;
-            const ctx = canvas.getContext('2d');
+            alert(downloadResultMessage(result, 'SVG 已保存'));
+            return;
+        }
 
-            img.onload = function () {
-                if (ctx) {
-                    ctx.clearRect(0, 0, canvas.width, canvas.height);
-                    ctx.fillStyle = 'rgba(0,0,0,0)';
-                    ctx.fillRect(0, 0, canvas.width, canvas.height);
-                    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-                    const dataURL = canvas.toDataURL(
-                        `image/${exportFormat}`,
-                        exportFormat === 'png' ? undefined : 0.92
-                    );
-                    downloadURI(dataURL, `qrcode.${exportFormat}`);
-                }
-            };
-            img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svgString);
+        try {
+            const dataURL = await svgElementToDataUrl(
+                svgElement,
+                exportResolution,
+                exportFormat,
+            );
+            const result = await downloadFile(dataURL, `qrcode.${exportFormat}`);
+            alert(downloadResultMessage(result, '图片已保存'));
+        } catch (e) {
+            console.error(e);
+            alert(e instanceof Error ? `导出失败：${e.message}` : '导出失败，请改用 PNG');
         }
     };
 
-    const downloadURI = (uri: string, name: string) => {
-        const link = document.createElement('a');
-        link.download = name;
-        link.href = uri;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    const renderCircularQrCode = (
+        ref: React.RefObject<SVGSVGElement | null>,
+    ) => {
+        if (!moduleSize || !moduleCount || !qrcode) return null;
+        return (
+            <CircularQRCode
+                qrcode={qrcode}
+                bgOption={bgOption}
+                bgColor={bgColor}
+                bgGradientType={bgGradientType}
+                bgGradientColors={bgGradientColors}
+                bgGradientAngle={bgGradientAngle}
+                qrOption={qrOption}
+                qrColor={qrColor}
+                qrGradientType={qrGradientType}
+                qrGradientColors={qrGradientColors}
+                qrGradientAngle={qrGradientAngle}
+                qrPalette={qrPalette}
+                finderPatternOption={finderPatternOption}
+                finderPatternColor={finderPatternColor}
+                showText={showText}
+                roundness={roundness}
+                opacityVariation={opacityVariation}
+                finderRoundness={finderRoundness}
+                rectScaleX={rectScaleX}
+                rectScaleY={rectScaleY}
+                scaleVariation={scaleVariation}
+                rectRotation={rectRotation}
+                uploadedImageDataUrl={uploadedImageDataUrl}
+                imageScale={imageScale}
+                moduleSize={moduleSize}
+                qrCodeSize={qrCodeSize}
+                qrTrimCircle={qrTrimCircle}
+                qrTrimCircleRadius={qrTrimCircleRadius}
+                moduleCount={moduleCount}
+                borderColor={borderColor}
+                borderWidth={borderWidth}
+                centerGapWidth={centerGapWidth}
+                centerGapHeight={centerGapHeight}
+                backgroundCoverage={backgroundCoverage}
+                svgRef={ref}
+                secondBorderEnabled={secondBorderEnabled}
+                secondBorderColor={secondBorderColor}
+                secondBorderRange={secondBorderRange}
+                borderTextEnabled={borderTextEnabled}
+                textLine1={textLine1}
+                textLine2={textLine2}
+                numTextLines={numTextLines}
+                fontFamily={fontFamily}
+                fontSize={fontSize}
+                textColor={textColor}
+                fontWeight={fontWeight}
+                letterSpacing={letterSpacing}
+                condensed={condensed}
+                textPadding={textPadding}
+                canvasSize={QR_CANVAS_SIZE}
+                barsEnabled={barsEnabled}
+                barsColor={barsColor}
+                barsWidth={barsWidth}
+                barsGapDegrees={barsGapDegrees}
+                barsRoundEnds={barsRoundEnds}
+                barsRadiusOffset={barsRadiusOffset}
+                bgGradientStops={bgGradientStops}
+                qrGradientStops={qrGradientStops}
+            />
+        );
     };
 
     // -----------------------------
@@ -439,76 +548,35 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                     <Card className="p-6 bg-white shadow-lg aspect-square">
                         {/*<div className="flex justify-center drop-shadow-lg">*/}
                         <div className="flex justify-center drop-shadow">
-                            {moduleSize && qrCodeSize && moduleCount && qrcode ? (
-                                <CircularQRCode
-                                    qrcode={qrcode}
-                                    bgOption={bgOption}
-                                    bgColor={bgColor}
-                                    bgGradientType={bgGradientType}
-                                    bgGradientColors={bgGradientColors}
-                                    bgGradientAngle={bgGradientAngle}
-                                    qrOption={qrOption}
-                                    qrColor={qrColor}
-                                    qrGradientType={qrGradientType}
-                                    qrGradientColors={qrGradientColors}
-                                    qrGradientAngle={qrGradientAngle}
-                                    qrPalette={qrPalette}
-                                    finderPatternOption={finderPatternOption}
-                                    finderPatternColor={finderPatternColor}
-                                    showText={showText}
-                                    roundness={roundness}
-                                    opacityVariation={opacityVariation}
-                                    finderRoundness={finderRoundness}
-                                    rectScaleX={rectScaleX}
-                                    rectScaleY={rectScaleY}
-                                    scaleVariation={scaleVariation}
-                                    rectRotation={rectRotation}
-                                    uploadedImageDataUrl={uploadedImageDataUrl}
-                                    imageScale={imageScale}
-                                    moduleSize={moduleSize}
-                                    qrCodeSize={qrCodeSize}
-
-                                    qrTrimCircle={qrTrimCircle}
-                                    qrTrimCircleRadius={qrTrimCircleRadius}
-
-                                    moduleCount={moduleCount}
-                                    borderColor={borderColor}
-                                    borderWidth={borderWidth}
-                                    centerGapWidth={centerGapWidth}
-                                    centerGapHeight={centerGapHeight}
-                                    backgroundCoverage={backgroundCoverage}
-                                    svgRef={svgRef}
-                                    secondBorderEnabled={secondBorderEnabled}
-                                    secondBorderColor={secondBorderColor}
-                                    secondBorderRange={secondBorderRange}
-                                    borderTextEnabled={borderTextEnabled}
-                                    textLine1={textLine1}
-                                    textLine2={textLine2}
-                                    numTextLines={numTextLines}
-                                    fontFamily={fontFamily}
-                                    fontSize={fontSize}
-                                    textColor={textColor}
-                                    fontWeight={fontWeight}
-                                    letterSpacing={letterSpacing}
-                                    condensed={condensed}
-                                    textPadding={textPadding}
-                                    // canvasSize={canvasSize}
-                                    canvasSize={700}
-                                    barsEnabled={barsEnabled}
-                                    barsColor={barsColor}
-                                    barsWidth={barsWidth}
-                                    barsGapDegrees={barsGapDegrees}
-                                    barsRoundEnds={barsRoundEnds}
-                                    barsRadiusOffset={barsRadiusOffset}
-
-                                    bgGradientStops={bgGradientStops}
-                                    qrGradientStops={qrGradientStops}
+                            {shellTemplateId !== NO_TEMPLATE &&
+                            moduleSize &&
+                            qrCodeSize &&
+                            moduleCount &&
+                            qrcode ? (
+                                <TemplateManualComposer
+                                    templateId={shellTemplateId}
+                                    transform={shellTransform}
+                                    onTransformChange={setShellTransform}
+                                    overlay={shellOverlay}
+                                    qrCanvasSize={QR_CANVAS_SIZE}
+                                    qrPreview={renderCircularQrCode(previewSvgRef)}
                                 />
+                            ) : moduleSize && qrCodeSize && moduleCount && qrcode ? (
+                                renderCircularQrCode(svgRef)
                             ) : (
                                 <div className="flex items-center justify-center h-64">
                                     <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-blue-500"></div>
                                 </div>
                             )}
+                            {shellTemplateId !== NO_TEMPLATE &&
+                                moduleSize &&
+                                qrCodeSize &&
+                                moduleCount &&
+                                qrcode && (
+                                    <div className="sr-only" aria-hidden>
+                                        {renderCircularQrCode(svgRef)}
+                                    </div>
+                                )}
                         </div>
                     </Card>
                 </div>
@@ -517,30 +585,34 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                 <div className="lg:w-1/2">
                     <Card className="bg-white shadow-lg">
                         <Tabs defaultValue="basic" className="w-full">
-                            <TabsList className="grid w-full grid-cols-3 lg:grid-cols-6 gap-1">
+                            <TabsList className="grid w-full grid-cols-4 lg:grid-cols-7 gap-1">
                                 <TabsTrigger value="basic" className="flex items-center gap-2">
                                     <Grid className="h-4 w-4" />
-                                    <span className="hidden lg:inline">Basic</span>
+                                    <span className="hidden lg:inline">基础</span>
                                 </TabsTrigger>
                                 <TabsTrigger value="style" className="flex items-center gap-2">
                                     <Palette className="h-4 w-4" />
-                                    <span className="hidden lg:inline">Style</span>
+                                    <span className="hidden lg:inline">样式</span>
                                 </TabsTrigger>
                                 <TabsTrigger value="pattern" className="flex items-center gap-2">
                                     <Square className="h-4 w-4" />
-                                    <span className="hidden lg:inline">Pattern</span>
+                                    <span className="hidden lg:inline">图案</span>
                                 </TabsTrigger>
                                 <TabsTrigger value="border" className="flex items-center gap-2">
                                     <CircleDot className="h-4 w-4" />
-                                    <span className="hidden lg:inline">Border</span>
+                                    <span className="hidden lg:inline">边框</span>
                                 </TabsTrigger>
                                 <TabsTrigger value="image" className="flex items-center gap-2">
                                     <ImageIcon className="h-4 w-4" />
-                                    <span className="hidden lg:inline">Image</span>
+                                    <span className="hidden lg:inline">图片</span>
+                                </TabsTrigger>
+                                <TabsTrigger value="template" className="flex items-center gap-2">
+                                    <LayoutTemplate className="h-4 w-4" />
+                                    <span className="hidden lg:inline">模板</span>
                                 </TabsTrigger>
                                 <TabsTrigger value="export" className="flex items-center gap-2">
                                     <Download className="h-4 w-4" />
-                                    <span className="hidden lg:inline">Export</span>
+                                    <span className="hidden lg:inline">导出</span>
                                 </TabsTrigger>
                             </TabsList>
 
@@ -552,19 +624,19 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                     <div className="space-y-4">
                                         {/* Text to encode */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Text to encode</Label>
+                                            <Label className="font-semibold">链接 / 文本</Label>
                                             <Input
                                                 type="text"
                                                 value={text}
                                                 onChange={(e) => setText(e.target.value)}
-                                                placeholder="Enter text or URL"
+                                                placeholder="输入企业微信获客链接或任意文本"
                                                 className="w-full"
                                             />
                                         </div>
 
                                         {/* QR Code Size */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">QR Code Size</Label>
+                                            <Label className="font-semibold">二维码尺寸</Label>
                                             <div className="flex items-center gap-4">
                                                 <Slider
                                                     min={200}
@@ -581,14 +653,14 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                         <div className="flex items-center gap-2 mt-4">
                                             <Switch checked={qrTrimCircle} onCheckedChange={setQrTrimCircle} />
                                             <Label className="font-semibold cursor-pointer">
-                                                QR code trim circle
+                                                裁成圆形
                                             </Label>
                                         </div>
 
 
                                         {qrTrimCircle && (
                                             <div className="space-y-2">
-                                                <Label className="font-semibold">QR code trim circle radius</Label>
+                                                <Label className="font-semibold">圆形裁切半径</Label>
                                                 <div className="flex items-center gap-4">
                                                     <Slider
                                                         min={50}
@@ -614,7 +686,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                     <div className="space-y-6">
                                         {/* BACKGROUND OPTIONS */}
                                         <div className="space-y-4">
-                                            <h3 className="font-semibold text-lg">Background</h3>
+                                            <h3 className="font-semibold text-lg">背景</h3>
 
                                             {/* Option: Solid or Gradient */}
                                             <div className="flex items-center gap-4">
@@ -628,7 +700,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         onChange={() => setBgOption('solid')}
                                                     />
                                                     <Label htmlFor="bgSolid" className="cursor-pointer">
-                                                        Solid
+                                                        纯色
                                                     </Label>
                                                 </div>
                                                 <div className="flex items-center gap-2">
@@ -641,7 +713,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         onChange={() => setBgOption('gradient')}
                                                     />
                                                     <Label htmlFor="bgGradient" className="cursor-pointer">
-                                                        Gradient
+                                                        渐变
                                                     </Label>
                                                 </div>
                                             </div>
@@ -649,7 +721,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {/* Solid */}
                                             {bgOption === 'solid' && (
                                                 <div className="flex flex-col gap-2">
-                                                    <Label>Background Color</Label>
+                                                    <Label>背景颜色</Label>
                                                     <Input
                                                         type="color"
                                                         value={bgColor}
@@ -663,7 +735,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {bgOption === 'gradient' && (
                                                 <div className="mt-2 space-y-4">
                                                     <div className="flex items-center mb-2">
-                                                        <Label className="mr-2">Type:</Label>
+                                                        <Label className="mr-2">类型：</Label>
                                                         <select
                                                             value={bgGradientType}
                                                             onChange={(e) =>
@@ -671,13 +743,13 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                             }
                                                             className="p-2 border rounded"
                                                         >
-                                                            <option value="linear">Linear</option>
-                                                            <option value="conic">Conic</option>
+                                                            <option value="linear">线性</option>
+                                                            <option value="conic">圆锥</option>
                                                         </select>
                                                     </div>
 
                                                     <div className="space-y-2">
-                                                        <Label>Gradient Colors</Label>
+                                                        <Label>渐变色</Label>
                                                         <GradientPicker
                                                             stops={bgGradientStops}
                                                             onChange={setBgGradientStops}
@@ -686,7 +758,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     </div>
 
                                                     <div className="flex items-center mb-2 space-x-2">
-                                                        <Label className="mr-2">Rotation Angle:</Label>
+                                                        <Label className="mr-2">旋转角度：</Label>
                                                         <Slider
                                                             min={0}
                                                             max={360}
@@ -703,7 +775,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* QR CODE STYLE OPTIONS */}
                                         <div className="space-y-4">
-                                            <h3 className="font-semibold text-lg">QR Code Style</h3>
+                                            <h3 className="font-semibold text-lg">码点样式</h3>
 
                                             {/* Option: Solid, Gradient, or Multiple */}
                                             <div className="flex flex-wrap items-center gap-4">
@@ -717,7 +789,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         onChange={() => setQrOption('solid')}
                                                     />
                                                     <Label htmlFor="qrSolid" className="cursor-pointer">
-                                                        Solid
+                                                        纯色
                                                     </Label>
                                                 </div>
                                                 {/*<div className="flex items-center gap-2">*/}
@@ -743,7 +815,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         onChange={() => setQrOption('multiple')}
                                                     />
                                                     <Label htmlFor="qrMultiple" className="cursor-pointer">
-                                                        Multiple
+                                                        多色
                                                     </Label>
                                                 </div>
                                             </div>
@@ -751,7 +823,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {/* Solid */}
                                             {qrOption === 'solid' && (
                                                 <div className="flex flex-col gap-2">
-                                                    <Label>QR Color</Label>
+                                                    <Label>码点颜色</Label>
                                                     <Input
                                                         type="color"
                                                         value={qrColor}
@@ -765,7 +837,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {/*{qrOption === 'gradient' && (*/}
                                             {/*    <div className="mt-2 space-y-4">*/}
                                             {/*        <div className="flex items-center mb-2">*/}
-                                            {/*            <Label className="mr-2">Type:</Label>*/}
+                                            {/*            <Label className="mr-2">类型：</Label>*/}
                                             {/*            <select*/}
                                             {/*                value={qrGradientType}*/}
                                             {/*                onChange={(e) =>*/}
@@ -773,13 +845,13 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {/*                }*/}
                                             {/*                className="p-2 border rounded"*/}
                                             {/*            >*/}
-                                            {/*                <option value="linear">Linear</option>*/}
-                                            {/*                <option value="conic">Conic</option>*/}
+                                            {/*                <option value="linear">线性</option>*/}
+                                            {/*                <option value="conic">圆锥</option>*/}
                                             {/*            </select>*/}
                                             {/*        </div>*/}
 
                                             {/*        <div className="space-y-2">*/}
-                                            {/*            <Label>Gradient Colors</Label>*/}
+                                            {/*            <Label>渐变色</Label>*/}
                                             {/*            <GradientPicker*/}
                                             {/*                stops={qrGradientStops}*/}
                                             {/*                onChange={setQrGradientStops}*/}
@@ -788,7 +860,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {/*        </div>*/}
                                             {/*        */}
                                             {/*        <div className="flex items-center mb-2 space-x-2">*/}
-                                            {/*            <Label className="mr-2">Rotation Angle:</Label>*/}
+                                            {/*            <Label className="mr-2">旋转角度：</Label>*/}
                                             {/*            <Slider*/}
                                             {/*                min={0}*/}
                                             {/*                max={360}*/}
@@ -807,7 +879,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                 <div className="space-y-2">
                                                     {qrPalette.map((color, index) => (
                                                         <div className="flex items-center gap-2" key={index}>
-                                                            <Label className="min-w-[70px]">Color {index + 1}:</Label>
+                                                            <Label className="min-w-[70px]">颜色 {index + 1}：</Label>
                                                             <Input
                                                                 type="color"
                                                                 value={color}
@@ -821,7 +893,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     ))}
                                                     {qrPalette.length < 6 && (
                                                         <Button variant="outline" onClick={handleAddQRColor}>
-                                                            Add Color
+                                                            添加颜色
                                                         </Button>
                                                     )}
                                                 </div>
@@ -837,7 +909,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                     <div className="space-y-6">
                                         {/* FINDER PATTERN COLOR */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Finder Pattern</h3>
+                                            <h3 className="font-semibold text-lg">定位角</h3>
                                             <div className="flex items-center gap-4">
                                                 <div className="flex items-center gap-2">
                                                     <input
@@ -849,7 +921,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         onChange={() => setFinderPatternOption('same')}
                                                     />
                                                     <Label htmlFor="finderSame" className="cursor-pointer">
-                                                        Same as QR
+                                                        与码点同色
                                                     </Label>
                                                 </div>
                                                 <div className="flex items-center gap-2">
@@ -868,7 +940,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             </div>
                                             {finderPatternOption === 'solid' && (
                                                 <div className="flex flex-col gap-2">
-                                                    <Label>Finder Color</Label>
+                                                    <Label>定位角颜色</Label>
                                                     <Input
                                                         type="color"
                                                         value={finderPatternColor}
@@ -881,9 +953,9 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* RECT SCALE */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Rect Scaling</h3>
+                                            <h3 className="font-semibold text-lg">方块缩放</h3>
                                             <div className="space-y-2">
-                                                <Label>Scale X</Label>
+                                                <Label>横向缩放</Label>
                                                 <div className="flex items-center gap-4">
                                                     <Slider
                                                         min={0.5}
@@ -897,7 +969,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                 </div>
                                             </div>
                                             <div className="space-y-2">
-                                                <Label>Scale Y</Label>
+                                                <Label>纵向缩放</Label>
                                                 <div className="flex items-center gap-4">
                                                     <Slider
                                                         min={0.5}
@@ -914,7 +986,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* SCALE VARIATION */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Scale Variation</Label>
+                                            <Label className="font-semibold">缩放随机</Label>
                                             <div className="flex items-center gap-4">
                                                 <Slider
                                                     min={0}
@@ -930,7 +1002,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* RECT ROTATION */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Rect Rotation (°)</Label>
+                                            <Label className="font-semibold">方块旋转（°）</Label>
                                             <div className="flex items-center gap-4">
                                                 <Slider
                                                     min={0}
@@ -946,7 +1018,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* ROUNDNESS */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Roundness</Label>
+                                            <Label className="font-semibold">圆角</Label>
                                             <Slider
                                                 min={0}
                                                 max={100}
@@ -958,7 +1030,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* FINDER PATTERN ROUNDNESS */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Finder Pattern Roundness</Label>
+                                            <Label className="font-semibold">定位角圆角</Label>
                                             <Slider
                                                 min={0}
                                                 max={100}
@@ -970,7 +1042,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* OPACITY VARIATION */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Opacity Variation</Label>
+                                            <Label className="font-semibold">透明度随机</Label>
                                             <Slider
                                                 min={0}
                                                 max={100}
@@ -984,7 +1056,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                         <div className="flex items-center gap-2 mt-4">
                                             <Switch checked={showText} onCheckedChange={setShowText} />
                                             <Label className="font-semibold cursor-pointer">
-                                                Show Text Around QR Code
+                                                在码周围显示文字
                                             </Label>
                                         </div>
                                     </div>
@@ -1013,10 +1085,10 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* OUTER BORDER */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Outer Border</h3>
+                                            <h3 className="font-semibold text-lg">外圈边框</h3>
                                             <div className="flex flex-col gap-2">
                                                 <div className="flex items-center gap-4">
-                                                    <Label>Color</Label>
+                                                    <Label>颜色</Label>
                                                     <Input
                                                         type="color"
                                                         value={borderColor}
@@ -1025,7 +1097,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     />
                                                 </div>
                                                 <div>
-                                                    <Label>Width</Label>
+                                                    <Label>宽度</Label>
                                                     <div className="flex items-center gap-4">
                                                         <Slider
                                                             min={0}
@@ -1043,18 +1115,18 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* SECOND BORDER */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Second Border</h3>
+                                            <h3 className="font-semibold text-lg">第二圈边框</h3>
                                             <div className="flex items-center gap-2">
                                                 <Switch
                                                     checked={secondBorderEnabled}
                                                     onCheckedChange={setSecondBorderEnabled}
                                                 />
-                                                <Label className="font-semibold cursor-pointer">Enable Second Border</Label>
+                                                <Label className="font-semibold cursor-pointer">启用第二圈边框</Label>
                                             </div>
                                             {secondBorderEnabled && (
                                                 <div className="space-y-4">
                                                     <div className="flex items-center gap-4">
-                                                        <Label>Color</Label>
+                                                        <Label>颜色</Label>
                                                         <Input
                                                             type="color"
                                                             value={secondBorderColor}
@@ -1063,7 +1135,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         />
                                                     </div>
                                                     <div>
-                                                        <Label>Coverage</Label>
+                                                        <Label>覆盖范围</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={0}
@@ -1087,32 +1159,32 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* TEXT ON BORDER */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Text on Border</h3>
+                                            <h3 className="font-semibold text-lg">边框文字</h3>
                                             <div className="flex items-center gap-2">
                                                 <Switch
                                                     checked={borderTextEnabled}
                                                     onCheckedChange={setBorderTextEnabled}
                                                 />
-                                                <Label className="font-semibold cursor-pointer">Enable Border Text</Label>
+                                                <Label className="font-semibold cursor-pointer">启用边框文字</Label>
                                             </div>
                                             {borderTextEnabled && (
                                                 <div className="space-y-4 mt-2">
                                                     {/* Number of Lines */}
                                                     <div>
-                                                        <Label>Number of Lines</Label>
+                                                        <Label>行数</Label>
                                                         <select
                                                             value={numTextLines}
                                                             onChange={(e) => setNumTextLines(Number(e.target.value) as 1 | 2)}
                                                             className="p-2 border rounded"
                                                         >
-                                                            <option value={1}>One Line</option>
-                                                            <option value={2}>Two Lines</option>
+                                                            <option value={1}>一行</option>
+                                                            <option value={2}>两行</option>
                                                         </select>
                                                     </div>
 
                                                     {/* Text Lines */}
                                                     <div>
-                                                        <Label>Text Line 1</Label>
+                                                        <Label>第一行文字</Label>
                                                         <Input
                                                             type="text"
                                                             value={textLine1}
@@ -1122,7 +1194,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     </div>
                                                     {numTextLines === 2 && (
                                                         <div>
-                                                            <Label>Text Line 2</Label>
+                                                            <Label>第二行文字</Label>
                                                             <Input
                                                                 type="text"
                                                                 value={textLine2}
@@ -1134,7 +1206,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                     {/* Font Family */}
                                                     <div>
-                                                        <Label>Font Family</Label>
+                                                        <Label>字体</Label>
                                                         <Input
                                                             type="text"
                                                             value={fontFamily}
@@ -1144,7 +1216,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                     {/* Font Size */}
                                                     <div>
-                                                        <Label>Font Size</Label>
+                                                        <Label>字号</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={10}
@@ -1160,20 +1232,20 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                     {/* Font Weight */}
                                                     <div>
-                                                        <Label>Font Weight</Label>
+                                                        <Label>字重</Label>
                                                         <select
                                                             value={fontWeight}
                                                             onChange={(e) => setFontWeight(e.target.value)}
                                                             className="p-2 border rounded"
                                                         >
-                                                            <option value="normal">Normal</option>
-                                                            <option value="bold">Bold</option>
+                                                            <option value="normal">常规</option>
+                                                            <option value="bold">粗体</option>
                                                         </select>
                                                     </div>
 
                                                     {/* Letter Spacing */}
                                                     <div>
-                                                        <Label>Letter Spacing</Label>
+                                                        <Label>字间距</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={0}
@@ -1189,7 +1261,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                     {/* Condensed */}
                                                     <div className="flex items-center gap-2">
-                                                        <Label>Condensed</Label>
+                                                        <Label>紧凑</Label>
                                                         <Switch
                                                             checked={condensed}
                                                             onCheckedChange={setCondensed}
@@ -1198,7 +1270,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                     {/* Text Padding */}
                                                     <div>
-                                                        <Label>Text Padding</Label>
+                                                        <Label>文字内边距</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={0}
@@ -1214,7 +1286,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                     {/* Text Color */}
                                                     <div>
-                                                        <Label>Text Color</Label>
+                                                        <Label>文字颜色</Label>
                                                         <Input
                                                             type="color"
                                                             value={textColor}
@@ -1235,10 +1307,10 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                     <div className="space-y-6">
                                         {/* CENTER GAP */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Center Gap</h3>
+                                            <h3 className="font-semibold text-lg">中心留白</h3>
                                             <div className="flex flex-col gap-2">
                                                 <div className="flex items-center gap-2">
-                                                    <Label className="min-w-[60px]">Width</Label>
+                                                    <Label className="min-w-[60px]">宽度</Label>
                                                     <Input
                                                         type="number"
                                                         value={centerGapWidth}
@@ -1254,7 +1326,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     <span>px</span>
                                                 </div>
                                                 <div className="flex items-center gap-2">
-                                                    <Label className="min-w-[60px]">Height</Label>
+                                                    <Label className="min-w-[60px]">高度</Label>
                                                     <Input
                                                         type="number"
                                                         value={centerGapHeight}
@@ -1274,7 +1346,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* BACKGROUND COVERAGE */}
                                         <div className="space-y-2">
-                                            <Label className="font-semibold">Background Coverage</Label>
+                                            <Label className="font-semibold">背景覆盖</Label>
                                             <div className="flex items-center gap-4">
                                                 <Slider
                                                     min={0}
@@ -1290,7 +1362,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* IMAGE UPLOAD */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Center Image</h3>
+                                            <h3 className="font-semibold text-lg">中心图片</h3>
                                             <Input
                                                 type="file"
                                                 accept="image/*"
@@ -1298,7 +1370,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             />
                                             {uploadedImageDataUrl && (
                                                 <div className="mt-2">
-                                                    <Label className="font-semibold">Image Scale</Label>
+                                                    <Label className="font-semibold">图片缩放</Label>
                                                     <div className="flex items-center gap-4">
                                                         <Slider
                                                             min={0.1}
@@ -1318,15 +1390,15 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                         {/* CIRCULAR BARS */}
                                         <div className="space-y-2">
-                                            <h3 className="font-semibold text-lg">Circular Bars</h3>
+                                            <h3 className="font-semibold text-lg">环形装饰条</h3>
                                             <div className="flex items-center gap-2">
                                                 <Switch checked={barsEnabled} onCheckedChange={setBarsEnabled} />
-                                                <Label className="font-semibold cursor-pointer">Enable Bars</Label>
+                                                <Label className="font-semibold cursor-pointer">启用装饰条</Label>
                                             </div>
                                             {barsEnabled && (
                                                 <div className="space-y-4 mt-2">
                                                     <div className="flex items-center gap-4">
-                                                        <Label>Color</Label>
+                                                        <Label>颜色</Label>
                                                         <Input
                                                             type="color"
                                                             value={barsColor}
@@ -1335,7 +1407,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         />
                                                     </div>
                                                     <div>
-                                                        <Label>Width</Label>
+                                                        <Label>宽度</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={1}
@@ -1349,7 +1421,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         </div>
                                                     </div>
                                                     <div>
-                                                        <Label>Gap (Degrees)</Label>
+                                                        <Label>间隔（度）</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={0}
@@ -1363,14 +1435,14 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         </div>
                                                     </div>
                                                     <div className="flex items-center gap-2">
-                                                        <Label>Round Ends</Label>
+                                                        <Label>圆头</Label>
                                                         <Switch
                                                             checked={barsRoundEnds}
                                                             onCheckedChange={setBarsRoundEnds}
                                                         />
                                                     </div>
                                                     <div>
-                                                        <Label>Radius Offset</Label>
+                                                        <Label>半径偏移</Label>
                                                         <div className="flex items-center gap-4">
                                                             <Slider
                                                                 min={0}
@@ -1389,6 +1461,133 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                     </div>
                                 </TabsContent>
 
+                                <TabsContent value="template">
+                                    <div className="space-y-4">
+                                        <Label className="font-semibold">海报模板</Label>
+                                        <select
+                                            value={shellTemplateId}
+                                            onChange={(e) => setShellTemplateId(e.target.value)}
+                                            className="w-full p-2 border rounded"
+                                        >
+                                            <option value={NO_TEMPLATE}>仅圆码（不套模板）</option>
+                                            {SHELL_TEMPLATES.map((t) => (
+                                                <option key={t.id} value={t.id}>
+                                                    {t.name}
+                                                </option>
+                                            ))}
+                                        </select>
+                                        {shellTemplateId !== NO_TEMPLATE && (
+                                            <>
+                                                <div className="space-y-3 rounded-lg border p-3 bg-gray-50">
+                                                    <div className="flex items-center gap-2">
+                                                        <Switch
+                                                            checked={shellOverlay.enabled}
+                                                            onCheckedChange={(enabled) =>
+                                                                setShellOverlay((o) => ({ ...o, enabled }))
+                                                            }
+                                                        />
+                                                        <Label className="font-semibold cursor-pointer flex-1">
+                                                            在海报上添加文字
+                                                        </Label>
+                                                    </div>
+                                                    {shellOverlay.enabled && (
+                                                        <>
+                                                            <div className="space-y-2">
+                                                                <Label>文字内容</Label>
+                                                                <Input
+                                                                    type="text"
+                                                                    value={shellOverlay.text}
+                                                                    onChange={(e) =>
+                                                                        setShellOverlay((o) => ({
+                                                                            ...o,
+                                                                            text: e.target.value,
+                                                                        }))
+                                                                    }
+                                                                    placeholder="输入要显示的文字或字符"
+                                                                    className="w-full"
+                                                                />
+                                                            </div>
+                                                            <div className="space-y-2">
+                                                                <div className="flex justify-between items-center">
+                                                                    <Label>字号</Label>
+                                                                    <span className="text-sm text-gray-600 tabular-nums">
+                                                                        {shellOverlay.fontSize} px
+                                                                    </span>
+                                                                </div>
+                                                                <div className="flex items-center gap-3">
+                                                                    <Slider
+                                                                        value={[shellOverlay.fontSize]}
+                                                                        onValueChange={([v]) =>
+                                                                            setShellOverlay((o) => ({
+                                                                                ...o,
+                                                                                fontSize: v,
+                                                                            }))
+                                                                        }
+                                                                        min={12}
+                                                                        max={72}
+                                                                        step={1}
+                                                                        className="flex-1"
+                                                                    />
+                                                                    <Input
+                                                                        type="number"
+                                                                        min={12}
+                                                                        max={72}
+                                                                        value={shellOverlay.fontSize}
+                                                                        onChange={(e) => {
+                                                                            const n = Number(e.target.value);
+                                                                            if (!Number.isFinite(n)) return;
+                                                                            setShellOverlay((o) => ({
+                                                                                ...o,
+                                                                                fontSize: Math.min(
+                                                                                    72,
+                                                                                    Math.max(12, Math.round(n)),
+                                                                                ),
+                                                                            }));
+                                                                        }}
+                                                                        className="w-16 h-9 text-right"
+                                                                    />
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex items-center gap-3">
+                                                                <Label>颜色</Label>
+                                                                <Input
+                                                                    type="color"
+                                                                    value={shellOverlay.color}
+                                                                    onChange={(e) =>
+                                                                        setShellOverlay((o) => ({
+                                                                            ...o,
+                                                                            color: e.target.value,
+                                                                        }))
+                                                                    }
+                                                                    className="w-14 h-9 p-1 cursor-pointer"
+                                                                />
+                                                                <Input
+                                                                    type="text"
+                                                                    value={shellOverlay.color}
+                                                                    onChange={(e) =>
+                                                                        setShellOverlay((o) => ({
+                                                                            ...o,
+                                                                            color: e.target.value,
+                                                                        }))
+                                                                    }
+                                                                    className="flex-1 font-mono text-sm"
+                                                                />
+                                                            </div>
+                                                            <p className="text-xs text-gray-500">
+                                                                文字显示在海报右下角，预览与导出一致。
+                                                            </p>
+                                                        </>
+                                                    )}
+                                                </div>
+                                                <p className="text-sm text-muted-foreground">
+                                                    在左侧预览中拖动圆码、用滑块调整大小，再点「导出」保存合成海报。
+                                                    建议先在「基础」里开启「裁成圆形」。
+                                                </p>
+                                            </>
+                                        )}
+                                    </div>
+                                </TabsContent>
+
                                 {/* -----------------------------
                   TAB CONTENT: EXPORT
                 ----------------------------- */}
@@ -1399,7 +1598,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             <div className="grid grid-cols-2 gap-4">
                                                 {/* Format */}
                                                 <div className="space-y-2">
-                                                    <Label className="font-semibold">Format</Label>
+                                                    <Label className="font-semibold">格式</Label>
                                                     <select
                                                         value={exportFormat}
                                                         onChange={(e) =>
@@ -1415,7 +1614,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
                                                 {/* Resolution */}
                                                 <div className="space-y-2">
-                                                    <Label className="font-semibold">Resolution (px)</Label>
+                                                    <Label className="font-semibold">分辨率（像素）</Label>
                                                     <Input
                                                         type="number"
                                                         value={exportResolution}
@@ -1434,7 +1633,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                             {/* Component (only for PNG/WEBP) */}
                                             {(exportFormat === 'png' || exportFormat === 'webp') && (
                                                 <div className="space-y-2">
-                                                    <Label className="font-semibold">Component</Label>
+                                                    <Label className="font-semibold">导出内容</Label>
                                                     <select
                                                         value={exportComponent}
                                                         onChange={(e) =>
@@ -1442,9 +1641,9 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                         }
                                                         className="w-full p-2 border rounded"
                                                     >
-                                                        <option value="full">Full</option>
-                                                        <option value="foreground">Foreground Only</option>
-                                                        <option value="background">Background Only</option>
+                                                        <option value="full">完整</option>
+                                                        <option value="foreground">仅前景</option>
+                                                        <option value="background">仅背景</option>
                                                     </select>
                                                 </div>
                                             )}
@@ -1456,7 +1655,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     className="w-full bg-green-500 hover:bg-green-600 text-white mt-2"
                                                 >
                                                     <Save className="w-4 h-4 mr-2" />
-                                                    {saving ? 'Saving...' : (isEditing ? 'Update QR Code' : 'Save QR Code')}
+                                                    {saving ? '保存中…' : (isEditing ? '更新二维码' : '保存二维码')}
                                                 </Button>
                                             )}
 
@@ -1465,7 +1664,9 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                 className="w-full bg-blue-500 hover:bg-blue-600 text-white mt-2"
                                             >
                                                 <Download className="w-4 h-4 mr-2" />
-                                                Export QR Code
+                                                {shellTemplateId !== NO_TEMPLATE
+                                                    ? '导出当前合成海报'
+                                                    : '导出二维码'}
                                             </Button>
                                         </div>
                                     </div>

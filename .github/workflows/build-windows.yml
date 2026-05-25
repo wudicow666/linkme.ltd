@@ -1,0 +1,46 @@
+# 在 GitHub 云端 Windows 环境打包，Mac 用户无需本机 Windows
+name: Build Windows App
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build offline web
+        run: |
+          cd offline
+          npm ci
+          npm run build
+
+      - name: Install Python deps
+        run: pip install -r desktop/requirements.txt
+
+      - name: PyInstaller bundle
+        run: |
+          cd desktop
+          pyinstaller --noconfirm --clean 圆形二维码生成-win.spec
+
+      - name: Add user readme
+        run: |
+          copy desktop\发给朋友的说明-Windows.txt desktop\dist\圆形二维码生成\使用说明.txt
+
+      - name: Create zip
+        run: |
+          Compress-Archive -Path desktop\dist\圆形二维码生成\* -DestinationPath desktop\release\圆形二维码生成-Windows.zip -Force
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: 圆形二维码生成-Windows
+          path: desktop/release/圆形二维码生成-Windows.zip
