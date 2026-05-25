@@ -20,6 +20,7 @@ jobs:
 
       - name: Build offline web
         run: |
+          npm ci
           cd offline
           npm ci
           npm run build
