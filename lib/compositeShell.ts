@@ -1,4 +1,5 @@
 import type { ShellTemplate } from "./shellTemplates";
+import { getShellTemplateImageUrl } from "./shellTemplates";
 import { loadImage } from "./qrRasterize";
 
 export type ShellPlacement = {
@@ -74,7 +75,7 @@ export async function compositeQrOnShell(
   templateImage?: HTMLImageElement,
 ): Promise<string> {
   const tplImg =
-    templateImage ?? (await loadImage(template.imageUrl));
+    templateImage ?? (await loadImage(getShellTemplateImageUrl(template)));
   const qrImg = await loadImage(qrDataUrl);
   const placement = resolveShellPlacement(template);
   const { cx, cy, innerRadius, outerRadius } = placement;

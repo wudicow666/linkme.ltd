@@ -1,4 +1,5 @@
 import type { ShellTemplate } from "./shellTemplates";
+import { getShellTemplateImageUrl } from "./shellTemplates";
 import type { ShellOverlayText } from "./shellOverlayText";
 import { drawShellOverlayText } from "./shellOverlayText";
 import { loadImage } from "./qrRasterize";
@@ -13,7 +14,7 @@ export async function exportManualShellComposite(
   options?: { overlay?: ShellOverlayText },
 ): Promise<string> {
   const [tplImg, qrImg] = await Promise.all([
-    loadImage(template.imageUrl),
+    loadImage(getShellTemplateImageUrl(template)),
     loadImage(qrDataUrl),
   ]);
 

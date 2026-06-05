@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { getShellTemplate } from "@/lib/shellTemplates";
+import { getShellTemplate, getShellTemplateImageUrl } from "@/lib/shellTemplates";
 import {
   DEFAULT_SHELL_OVERLAY_LAYOUT,
   type ShellOverlayText,
@@ -127,7 +127,7 @@ const TemplateManualComposer: React.FC<Props> = ({
         style={{ aspectRatio: `${template.width} / ${template.height}` }}
       >
         <img
-          src={template.imageUrl}
+          src={getShellTemplateImageUrl(template)}
           alt={template.name}
           className="block w-full h-full pointer-events-none"
           draggable={false}

@@ -1,3 +1,5 @@
+import { resolvePublicAsset } from "./publicAssetUrl";
+
 export type ShellTemplate = {
   id: string;
   name: string;
@@ -30,4 +32,8 @@ export const NO_TEMPLATE = "none";
 
 export function getShellTemplate(id: string): ShellTemplate | undefined {
   return SHELL_TEMPLATES.find((t) => t.id === id);
+}
+
+export function getShellTemplateImageUrl(template: ShellTemplate): string {
+  return resolvePublicAsset(template.imageUrl);
 }
