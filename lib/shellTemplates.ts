@@ -20,8 +20,8 @@ export const SHELL_TEMPLATES: ShellTemplate[] = [
     imageUrl: "/templates/douyin-shell.png",
     width: 743,
     height: 1024,
-    defaultQrX: 371,
-    defaultQrY: 358,
+    defaultQrX: 368,
+    defaultQrY: 344,
     defaultQrDiameter: 324,
   },
 ];

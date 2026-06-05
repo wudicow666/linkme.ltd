@@ -109,6 +109,22 @@ def _parse_save_payload(*args, **kwargs) -> tuple[str | None, str]:
     return data_url, suggested_name.strip()
 
 
+def _macos_clear_save_metadata(path: Path) -> None:
+    """去掉导出文件上的隔离/来源标记，避免双击 PNG 无反应。"""
+    if sys.platform != "darwin":
+        return
+    import subprocess
+
+    try:
+        subprocess.run(
+            ["xattr", "-cr", str(path)],
+            check=False,
+            capture_output=True,
+        )
+    except OSError:
+        pass
+
+
 def _ext_for_mime(mime: str) -> str:
     if "jpeg" in mime or "jpg" in mime:
         return ".jpg"
@@ -168,6 +184,7 @@ class DesktopApi:
         if not out.suffix:
             out = out.with_suffix(ext)
         out.write_bytes(raw)
+        _macos_clear_save_metadata(out)
         return {"ok": True, "path": str(out)}
 
     def save_image_begin(self, filename="qrcode.png"):
@@ -212,29 +229,57 @@ class DesktopApi:
             return {"ok": False, "error": str(e)}
 
 
-def main() -> None:
-    root = web_root()
-    if not (root / "index.html").is_file():
-        sys.exit(f"缺少网页资源: {root}\n请先执行 offline 目录下的 npm run build")
-
-    port = free_port()
-    handler = make_handler(root)
-    httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
-    threading.Thread(target=httpd.serve_forever, daemon=True).start()
-
-    url = f"http://127.0.0.1:{port}/"
-    import webview
-
-    webview.create_window(
-        "圆形二维码生成器",
-        url,
-        width=1280,
-        height=900,
-        min_size=(900, 700),
-        js_api=DesktopApi(),
+def _write_startup_error(msg: str) -> None:
+    """双击无提示失败时，在桌面留下说明文件。"""
+    text = (
+        "圆形二维码生成器未能启动。\n\n"
+        f"{msg}\n\n"
+        "可尝试：\n"
+        "1. 右键「圆形二维码生成.app」→ 打开 → 再点「打开」\n"
+        "2. 双击桌面「启动圆形二维码生成.command」\n"
+        "3. 重新运行 desktop/build_mac.sh 打包\n"
     )
-    webview.start()
-    httpd.shutdown()
+    for log in (
+        Path.home() / "Desktop" / "圆形二维码生成-启动失败.txt",
+        Path.home() / "圆形二维码生成-启动失败.txt",
+    ):
+        try:
+            log.write_text(text, encoding="utf-8")
+            break
+        except OSError:
+            continue
+
+
+def main() -> None:
+    try:
+        root = web_root()
+        if not (root / "index.html").is_file():
+            msg = f"缺少网页资源: {root}\n请先执行 offline 目录下的 npm run build"
+            _write_startup_error(msg)
+            sys.exit(msg)
+
+        port = free_port()
+        handler = make_handler(root)
+        httpd = ThreadingHTTPServer(("127.0.0.1", port), handler)
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+        url = f"http://127.0.0.1:{port}/"
+        import webview
+
+        webview.create_window(
+            "圆形二维码生成器",
+            url,
+            width=1280,
+            height=900,
+            min_size=(900, 700),
+            js_api=DesktopApi(),
+        )
+        webview.start()
+        httpd.shutdown()
+    except Exception as e:
+        traceback.print_exc()
+        _write_startup_error(str(e))
+        raise
 
 
 if __name__ == "__main__":

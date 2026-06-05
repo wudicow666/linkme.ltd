@@ -4,6 +4,37 @@ import React, { useMemo, useState } from "react";
 
 type QROptionType = "solid" | "gradient" | "multiple";
 
+/** classic=三层方块；unifiedDots=圆点拼方框；cross=十字+弱化外框；sparse560=560 稀疏定位角 */
+export type FinderRenderStyle =
+    | "classic"
+    | "unifiedDots"
+    | "cross"
+    | "sparse560";
+
+/** 560 每个 7×7 定位角内仅保留的 17 个格（本地 lr,lc） */
+const SPARSE560_FINDER_LOCAL = new Set([
+    "2,3",
+    "3,3",
+    "4,3",
+    "3,2",
+    "3,4",
+    "0,2",
+    "0,3",
+    "0,4",
+    "6,2",
+    "6,3",
+    "6,4",
+    "2,0",
+    "3,0",
+    "4,0",
+    "2,6",
+    "3,6",
+    "4,6",
+]);
+
+/** 扫一扫优化时额外补 4 角（不补满框，避免方框感） */
+const SPARSE560_SCAN_CORNER_LOCAL = new Set(["0,0", "0,6", "6,0", "6,6"]);
+
 interface CircularQRCodeProps {
     qrcode: any;
     bgOption: "solid" | "gradient";
@@ -19,6 +50,9 @@ interface CircularQRCodeProps {
     qrPalette: string[];
     finderPatternOption: "same" | "solid";
     finderPatternColor: string;
+    finderRenderStyle: FinderRenderStyle;
+    /** sparse560 下补全对齐块/定位角扫码暗点，兼顾微信与抖音扫一扫 */
+    scanOptimized: boolean;
     showText: boolean;
     roundness: number;
     opacityVariation: number;
@@ -31,6 +65,8 @@ interface CircularQRCodeProps {
     imageScale: number;
     moduleSize: number;
     qrCodeSize: number;
+    /** 82–100：在 qrCodeSize 基础上等比缩小圆码，增大外圈点阵占比 */
+    qrCompactness: number;
     qrTrimCircle: boolean;
     qrTrimCircleRadius: number;
     moduleCount: number;
@@ -85,6 +121,8 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
                                                            qrPalette,
                                                            finderPatternOption,
                                                            finderPatternColor,
+                                                           finderRenderStyle,
+                                                           scanOptimized,
                                                            showText,
                                                            roundness,
                                                            opacityVariation,
@@ -97,6 +135,7 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
                                                            imageScale,
                                                            moduleSize,
                                                            qrCodeSize,
+                                                           qrCompactness,
                                                            qrTrimCircle,
                                                            qrTrimCircleRadius,
                                                            moduleCount,
@@ -166,8 +205,11 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
     }, [qrOption, qrColor, qrGradientId]);
 
     // Basic geometry / calculations
-    const qrCodeOffsetX = (canvasSize - qrCodeSize) / 2;
-    const qrCodeOffsetY = (canvasSize - qrCodeSize) / 2;
+    const compactnessFactor = qrCompactness / 100;
+    const effectiveQrCodeSize = qrCodeSize * compactnessFactor;
+    const qrCodeOffsetX = (canvasSize - effectiveQrCodeSize) / 2;
+    const qrCodeOffsetY = (canvasSize - effectiveQrCodeSize) / 2;
+    const qrGroupTransform = `translate(${qrCodeOffsetX}px, ${qrCodeOffsetY}px) scale(${compactnessFactor})`;
     const rxRy = (roundness / 100) * (moduleSize / 2);
 
     // Variation parameters
@@ -219,6 +261,418 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
         return Math.max(min, Math.min(value, max));
     }
 
+    const isFinderModule = (row: number, col: number) =>
+        finderPatternPositions.some(
+            (pos) =>
+                row >= pos.row &&
+                row < pos.row + 7 &&
+                col >= pos.col &&
+                col < pos.col + 7
+        );
+
+    const resolveModuleFill = (): string => {
+        if (qrOption === "multiple") {
+            const randomIndex = Math.floor(Math.random() * qrPalette.length);
+            return qrPalette[randomIndex];
+        }
+        return qrFill || qrColor || "#000000";
+    };
+
+    const shouldSkipModuleForGapOrTrim = (
+        row: number,
+        col: number
+    ): boolean => {
+        const x = col * moduleSize;
+        const y = row * moduleSize;
+        const moduleRect = { x, y, width: moduleSize, height: moduleSize };
+        const gapRect = {
+            x: centerGapX,
+            y: centerGapY,
+            width: centerGapWidth,
+            height: centerGapHeight,
+        };
+        if (rectanglesIntersect(moduleRect, gapRect)) {
+            return true;
+        }
+        const trimCircle = {
+            x: qrCodeSize / 2,
+            y: qrCodeSize / 2,
+            radius: qrTrimCircleRadius,
+        };
+        return !rectangleIntersectsCircle(moduleRect, trimCircle) && qrTrimCircle;
+    };
+
+    const getFinderLocalCoords = (
+        row: number,
+        col: number
+    ): { pos: { row: number; col: number }; lr: number; lc: number } | null => {
+        const pos = finderPatternPositions.find(
+            (p) =>
+                row >= p.row &&
+                row < p.row + 7 &&
+                col >= p.col &&
+                col < p.col + 7
+        );
+        if (!pos) {
+            return null;
+        }
+        return {
+            pos,
+            lr: row - pos.row,
+            lc: col - pos.col,
+        };
+    };
+
+    const isSparse560FinderDot = (row: number, col: number): boolean => {
+        const local = getFinderLocalCoords(row, col);
+        if (!local) {
+            return false;
+        }
+        const key = `${local.lr},${local.lc}`;
+        if (SPARSE560_FINDER_LOCAL.has(key)) {
+            return true;
+        }
+        return (
+            scanOptimized && SPARSE560_SCAN_CORNER_LOCAL.has(key)
+        );
+    };
+
+    const isSparse560AccentDot = (row: number, col: number): boolean => {
+        const local = getFinderLocalCoords(row, col);
+        if (!local) {
+            return false;
+        }
+        return SPARSE560_FINDER_LOCAL.has(`${local.lr},${local.lc}`);
+    };
+
+    const getCrossFinderVisual = (
+        row: number,
+        col: number
+    ): { scale: number; opacity: number } => {
+        const pos = finderPatternPositions.find(
+            (p) =>
+                row >= p.row &&
+                row < p.row + 7 &&
+                col >= p.col &&
+                col < p.col + 7
+        );
+        if (!pos) {
+            return { scale: 1, opacity: 1 };
+        }
+
+        const lr = row - pos.row;
+        const lc = col - pos.col;
+
+        // 十字主轴：保持清晰可扫
+        if (lr === 3 || lc === 3) {
+            return { scale: 1, opacity: 1 };
+        }
+
+        // 外框（非十字交点）：略弱化但仍足够扫码
+        if (lr === 0 || lr === 6 || lc === 0 || lc === 6) {
+            return { scale: 0.48, opacity: 0.62 };
+        }
+
+        // 内框四角
+        if ((lr === 2 || lr === 4) && (lc === 2 || lc === 4)) {
+            return { scale: 0.42, opacity: 0.55 };
+        }
+
+        // 内框边（非十字）
+        if (lr >= 2 && lr <= 4 && lc >= 2 && lc <= 4) {
+            return { scale: 0.5, opacity: 0.58 };
+        }
+
+        return { scale: 0.45, opacity: 0.55 };
+    };
+
+    const distanceToQrBoundingBox = (
+        px: number,
+        py: number
+    ): number => {
+        const left = qrCodeOffsetX;
+        const right = qrCodeOffsetX + effectiveQrCodeSize;
+        const top = qrCodeOffsetY;
+        const bottom = qrCodeOffsetY + effectiveQrCodeSize;
+        const dx =
+            px < left ? left - px : px >= right ? px - right : 0;
+        const dy =
+            py < top ? top - py : py >= bottom ? py - bottom : 0;
+        return Math.sqrt(dx * dx + dy * dy);
+    };
+
+    const ALIGNMENT_PATTERN = [
+        [1, 1, 1, 1, 1],
+        [1, 0, 0, 0, 1],
+        [1, 0, 1, 1, 1],
+        [1, 0, 1, 1, 1],
+        [1, 1, 1, 1, 1],
+    ];
+
+    const alignmentPatternOrigins = useMemo(() => {
+        if (!qrcode || moduleCount < 21) {
+            return [] as { row: number; col: number }[];
+        }
+
+        const origins: { row: number; col: number }[] = [];
+
+        for (let r = 0; r <= moduleCount - 5; r++) {
+            for (let c = 0; c <= moduleCount - 5; c++) {
+                let overlapsFinder = false;
+                for (let dr = 0; dr < 5; dr++) {
+                    for (let dc = 0; dc < 5; dc++) {
+                        if (isFinderModule(r + dr, c + dc)) {
+                            overlapsFinder = true;
+                            break;
+                        }
+                    }
+                    if (overlapsFinder) break;
+                }
+                if (overlapsFinder) continue;
+
+                let matches = true;
+                for (let dr = 0; dr < 5; dr++) {
+                    for (let dc = 0; dc < 5; dc++) {
+                        const shouldBeDark = ALIGNMENT_PATTERN[dr][dc] === 1;
+                        if (qrcode.isDark(r + dr, c + dc) !== shouldBeDark) {
+                            matches = false;
+                            break;
+                        }
+                    }
+                    if (!matches) break;
+                }
+                if (matches) {
+                    origins.push({ row: r, col: c });
+                }
+            }
+        }
+
+        return origins;
+    }, [qrcode, moduleCount, finderPatternPositions]);
+
+    const isAlignmentModule = (row: number, col: number) =>
+        alignmentPatternOrigins.some(
+            (origin) =>
+                row >= origin.row &&
+                row < origin.row + 5 &&
+                col >= origin.col &&
+                col < origin.col + 5
+        );
+
+    const getCrossAlignmentVisual = (
+        row: number,
+        col: number
+    ): { scale: number; opacity: number } => {
+        const origin = alignmentPatternOrigins.find(
+            (o) =>
+                row >= o.row &&
+                row < o.row + 5 &&
+                col >= o.col &&
+                col < o.col + 5
+        );
+        if (!origin) {
+            return { scale: 0.32, opacity: 0.3 };
+        }
+
+        const lr = row - origin.row;
+        const lc = col - origin.col;
+
+        if (lr === 2 && lc === 2) {
+            return { scale: 0.42, opacity: 0.38 };
+        }
+
+        if (lr === 0 || lr === 4 || lc === 0 || lc === 4) {
+            return { scale: 0.38, opacity: 0.48 };
+        }
+
+        return { scale: 0.4, opacity: 0.5 };
+    };
+
+    const getCrossDataVisual = (): { scale: number; opacity: number } => ({
+        scale: 0.96,
+        opacity: 1,
+    });
+
+    /** 560 稀疏定位角主轴 17 点：略大一点便于肉眼辨认 */
+    const getSparse560AccentVisual = (): { scale: number; opacity: number } => ({
+        scale: 1,
+        opacity: 1,
+    });
+
+    /** 对齐块：介于弱化与全实心之间，避免微信/抖音扫一扫互斥 */
+    const getScanBalancedAlignmentVisual = (): { scale: number; opacity: number } => ({
+        scale: 0.93,
+        opacity: 0.96,
+    });
+
+    const decorStrokeColor =
+        qrOption === "solid" ? qrColor : qrFill || qrColor || "#000000";
+
+    const clockHourToRad = (hour: number) =>
+        -Math.PI / 2 + (hour / 12) * 2 * Math.PI;
+
+    const uses560VisualStack =
+        finderRenderStyle === "cross" || finderRenderStyle === "sparse560";
+
+    const outerDecorations = useMemo(() => {
+        if (!uses560VisualStack) {
+            return null;
+        }
+
+        const cx = canvasSize / 2;
+        const cy = canvasSize / 2;
+        const outerR = canvasSize / 2;
+        // 放在 QR 数据区之外、靠近外边框，避免与三个定位角重叠
+        const decorRadius =
+            outerR - borderWidth - Math.max(moduleSize * 1.2, 8);
+        const ringR = moduleSize * 0.72;
+        const dotR = moduleSize * 0.22;
+        const strokeW = Math.max(0.8, moduleSize * 0.07);
+        const decorOpacity = 0.42;
+
+        const anchors = [10, 4, 8].map((hour) => {
+            const angle = clockHourToRad(hour);
+            const x = cx + decorRadius * Math.cos(angle);
+            const y = cy + decorRadius * Math.sin(angle);
+            return (
+                <g key={`decor-anchor-${hour}`} opacity={decorOpacity}>
+                    <circle
+                        cx={x}
+                        cy={y}
+                        r={ringR}
+                        fill="none"
+                        stroke={decorStrokeColor}
+                        strokeWidth={strokeW}
+                    />
+                    <circle cx={x} cy={y} r={dotR} fill={decorStrokeColor} />
+                </g>
+            );
+        });
+
+        const largeAngle = clockHourToRad(2);
+        const largeX = cx + decorRadius * Math.cos(largeAngle);
+        const largeY = cy + decorRadius * Math.sin(largeAngle);
+        const largeRing = (
+            <circle
+                key="decor-large-ring"
+                cx={largeX}
+                cy={largeY}
+                r={moduleSize * 1.55}
+                fill="none"
+                stroke={decorStrokeColor}
+                strokeWidth={strokeW}
+                opacity={decorOpacity * 0.85}
+            />
+        );
+
+        return (
+            <g className="outerDecorations" pointerEvents="none">
+                {anchors}
+                {largeRing}
+            </g>
+        );
+    }, [
+        uses560VisualStack,
+        canvasSize,
+        moduleSize,
+        borderWidth,
+        decorStrokeColor,
+    ]);
+
+    const renderModuleDot = (
+        row: number,
+        col: number,
+        rectId: string,
+        options?: {
+            clickable?: boolean;
+            opacity?: number;
+            scale?: number;
+        }
+    ): React.ReactNode | null => {
+        if (removedRectIds.has(rectId)) {
+            return null;
+        }
+        if (shouldSkipModuleForGapOrTrim(row, col)) {
+            return null;
+        }
+
+        const x = col * moduleSize;
+        const y = row * moduleSize;
+        const inFinder = isFinderModule(row, col);
+        const inAlignment = isAlignmentModule(row, col);
+
+        let moduleVisual: { scale: number; opacity: number } | null = null;
+        if (finderRenderStyle === "sparse560") {
+            if (inFinder) {
+                if (!isSparse560FinderDot(row, col)) {
+                    return null;
+                }
+                moduleVisual = isSparse560AccentDot(row, col)
+                    ? getSparse560AccentVisual()
+                    : getCrossDataVisual();
+            } else if (inAlignment) {
+                moduleVisual = scanOptimized
+                    ? getScanBalancedAlignmentVisual()
+                    : getCrossAlignmentVisual(row, col);
+            } else {
+                moduleVisual = getCrossDataVisual();
+            }
+        } else if (finderRenderStyle === "cross") {
+            if (inFinder) {
+                moduleVisual = getCrossFinderVisual(row, col);
+            } else if (inAlignment) {
+                moduleVisual = getCrossAlignmentVisual(row, col);
+            } else {
+                moduleVisual = getCrossDataVisual();
+            }
+        }
+
+        const opacity =
+            options?.opacity ??
+            (moduleVisual
+                ? moduleVisual.opacity
+                : 1 - Math.random() * maxOpacityVariation);
+
+        const fillColor = resolveModuleFill();
+
+        const scaleFactor =
+            options?.scale ??
+            (moduleVisual
+                ? moduleVisual.scale
+                : 1 - Math.random() * (scaleVariation / 100));
+
+        const finalScaleX = rectScaleX * scaleFactor;
+        const finalScaleY = rectScaleY * scaleFactor;
+        const clickable = options?.clickable ?? true;
+
+        return (
+            <g
+                key={rectId}
+                onClick={clickable ? () => handleRectClick(rectId) : undefined}
+                transform={`
+              translate(${x + moduleSize / 2}, ${y + moduleSize / 2})
+              rotate(${rectRotation})
+              scale(${finalScaleX}, ${finalScaleY})
+              translate(${-moduleSize / 2}, ${-moduleSize / 2})
+            `}
+            >
+                <rect
+                    width={moduleSize}
+                    height={moduleSize}
+                    rx={rxRy}
+                    ry={rxRy}
+                    fill={fillColor}
+                    style={{
+                        shapeRendering: "crispEdges",
+                        opacity,
+                        cursor: clickable ? "pointer" : "default",
+                    }}
+                />
+            </g>
+        );
+    };
+
+
     // -----------------------------
     // QR modules (non-finder)
     // -----------------------------
@@ -227,93 +681,22 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
 
         for (let row = 0; row < moduleCount; row++) {
             for (let col = 0; col < moduleCount; col++) {
-                const isFinderPattern = finderPatternPositions.some(
-                    (pos) =>
-                        row >= pos.row &&
-                        row < pos.row + 7 &&
-                        col >= pos.col &&
-                        col < pos.col + 7
-                );
-
-                // If it's not dark or is part of finder => skip
-                if (!qrcode.isDark(row, col) || isFinderPattern) {
+                if (!qrcode.isDark(row, col)) {
                     continue;
                 }
 
-                // Coordinates in the overall QR code area
-                const x = col * moduleSize;
-                const y = row * moduleSize;
-
-                // Check intersection w/ center gap
-                const moduleRect = { x, y, width: moduleSize, height: moduleSize };
-                const gapRect = {
-                    x: centerGapX,
-                    y: centerGapY,
-                    width: centerGapWidth,
-                    height: centerGapHeight,
-                };
-                if (rectanglesIntersect(moduleRect, gapRect)) {
+                if (
+                    isFinderModule(row, col) &&
+                    finderRenderStyle === "classic"
+                ) {
                     continue;
                 }
 
-                // Trim circle check
-                const trimCircle = {
-                    x: qrCodeSize / 2,
-                    y: qrCodeSize / 2,
-                    radius: qrTrimCircleRadius,
-                };
-                if (!rectangleIntersectsCircle(moduleRect, trimCircle) && qrTrimCircle) {
-                    continue;
-                }
-
-                // Variation in opacity
-                const opacity = 1 - Math.random() * maxOpacityVariation;
-
-                // If multiple => pick a random from the palette; else use qrFill
-                let fillColor: string | null = qrFill || "#000000";
-                if (qrOption === "multiple") {
-                    const randomIndex = Math.floor(Math.random() * qrPalette.length);
-                    fillColor = qrPalette[randomIndex];
-                }
-
-                // Scale Variation
-                const randScaleFactor = 1 - Math.random() * (scaleVariation / 100);
-                const finalScaleX = rectScaleX * randScaleFactor;
-                const finalScaleY = rectScaleY * randScaleFactor;
-
-                // NEW or UPDATED: unique ID for this rect
                 const rectId = `qr-${row}-${col}`;
-
-                // Skip if user already removed it
-                if (removedRectIds.has(rectId)) {
-                    continue;
+                const dot = renderModuleDot(row, col, rectId);
+                if (dot) {
+                    rects.push(dot);
                 }
-
-                rects.push(
-                    <g
-                        key={rectId}
-                        onClick={() => handleRectClick(rectId)}
-                        transform={`
-              translate(${x + moduleSize / 2}, ${y + moduleSize / 2})
-              rotate(${rectRotation})
-              scale(${finalScaleX}, ${finalScaleY})
-              translate(${-moduleSize / 2}, ${-moduleSize / 2})
-            `}
-                    >
-                        <rect
-                            width={moduleSize}
-                            height={moduleSize}
-                            rx={rxRy}
-                            ry={rxRy}
-                            fill={fillColor}
-                            style={{
-                                shapeRendering: "crispEdges",
-                                opacity: opacity,
-                                cursor: "pointer", // optional for clarity
-                            }}
-                        />
-                    </g>
-                );
             }
         }
         return rects;
@@ -324,6 +707,7 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
         rxRy,
         maxOpacityVariation,
         qrFill,
+        qrColor,
         finderPatternPositions,
         centerGapX,
         centerGapY,
@@ -337,7 +721,10 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
         rectRotation,
         qrTrimCircle,
         qrTrimCircleRadius,
-        removedRectIds, // re-run if removedRectIds changes
+        finderRenderStyle,
+        scanOptimized,
+        removedRectIds,
+        alignmentPatternOrigins,
     ]);
 
     // -----------------------------
@@ -463,22 +850,94 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
                     continue;
                 }
 
-                // If it's inside the QR code bounding box => skip
-                // Add a 15px offset so it is a little bigger
+                if (uses560VisualStack) {
+                    const cellCenterX = x + moduleSize / 2;
+                    const cellCenterY = y + moduleSize / 2;
+
+                    // 严禁在 QR 矩阵区域内绘制背景点（含静区/留白格）
+                    if (
+                        distanceToQrBoundingBox(cellCenterX, cellCenterY) <
+                        moduleSize * 0.5
+                    ) {
+                        continue;
+                    }
+
+                    const edgeDist = distanceToQrBoundingBox(
+                        cellCenterX,
+                        cellCenterY
+                    );
+                    const inBlendRing = edgeDist < moduleSize * 4.5;
+
+                    const backgroundSpawnRate = inBlendRing ? 0.72 : 0.5;
+                    if (Math.random() >= backgroundSpawnRate) {
+                        continue;
+                    }
+
+                    // 与 QR 数据点同色同尺度：实心黑、不透明度 1，仅通过疏密区分区域
+                    const dataVisual = getCrossDataVisual();
+                    const opacity = dataVisual.opacity;
+                    const randScaleFactor =
+                        dataVisual.scale * (0.97 + Math.random() * 0.06);
+
+                    let fillColor: string | null = qrFill || "#000000";
+                    if (qrOption === "multiple") {
+                        const randomIndex = Math.floor(
+                            Math.random() * qrPalette.length
+                        );
+                        fillColor = qrPalette[randomIndex];
+                    }
+
+                    const rectId = `bg-${row}-${col}`;
+                    if (removedRectIds.has(rectId)) {
+                        continue;
+                    }
+
+                    const finalScaleX = rectScaleX * randScaleFactor;
+                    const finalScaleY = rectScaleY * randScaleFactor;
+
+                    rects.push(
+                        <g
+                            key={rectId}
+                            onClick={() => handleRectClick(rectId)}
+                            transform={`
+                translate(${x + moduleSize / 2}, ${y + moduleSize / 2})
+                rotate(${rectRotation})
+                scale(${finalScaleX}, ${finalScaleY})
+                translate(${-moduleSize / 2}, ${-moduleSize / 2})
+              `}
+                        >
+                            <rect
+                                width={moduleSize}
+                                height={moduleSize}
+                                rx={rxRy}
+                                ry={rxRy}
+                                fill={fillColor!}
+                                style={{
+                                    opacity,
+                                    cursor: "pointer",
+                                }}
+                            />
+                        </g>
+                    );
+                    continue;
+                }
 
                 const referenceSize = 440;
                 const referenceOffset = 15;
 
                 if (
-                    x >= qrCodeOffsetX - (qrCodeSize / referenceSize) * referenceOffset &&
-                    x < qrCodeOffsetX + qrCodeSize &&
-                    y >= qrCodeOffsetY - (qrCodeSize / referenceSize) * referenceOffset &&
-                    y < qrCodeOffsetY + qrCodeSize
+                    x >=
+                        qrCodeOffsetX -
+                            (effectiveQrCodeSize / referenceSize) * referenceOffset &&
+                    x < qrCodeOffsetX + effectiveQrCodeSize &&
+                    y >=
+                        qrCodeOffsetY -
+                            (effectiveQrCodeSize / referenceSize) * referenceOffset &&
+                    y < qrCodeOffsetY + effectiveQrCodeSize
                 ) {
                     continue;
                 }
 
-                // Randomly fill ~half of them
                 if (Math.random() < 0.5) {
                     const opacity = 1 - Math.random() * maxOpacityVariation;
                     let fillColor: string | null = qrFill || "#000000";
@@ -489,7 +948,8 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
                     }
 
                     // Scale Variation
-                    const randScaleFactor = 1 - Math.random() * (scaleVariation / 100);
+                    const randScaleFactor =
+                        1 - Math.random() * (scaleVariation / 100);
                     const finalScaleX = rectScaleX * randScaleFactor;
                     const finalScaleY = rectScaleY * randScaleFactor;
 
@@ -535,6 +995,7 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
         qrCodeOffsetX,
         qrCodeOffsetY,
         qrCodeSize,
+        effectiveQrCodeSize,
         rxRy,
         maxOpacityVariation,
         qrFill,
@@ -545,7 +1006,10 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
         rectScaleY,
         scaleVariation,
         rectRotation,
-        removedRectIds, // re-run if removedRectIds changes
+        removedRectIds,
+        finderRenderStyle,
+        qrTrimCircle,
+        qrTrimCircleRadius,
     ]);
 
     // -----------------------------
@@ -902,6 +1366,9 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
                 {backgroundRects}
             </g>
 
+            {/* 外圈装饰（在 QR 下层，避免遮挡码点） */}
+            {outerDecorations}
+
             {/* Outer Border */}
             <circle
                 cx={canvasSize / 2}
@@ -927,14 +1394,15 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
             <g
                 className="qrcode"
                 style={{
-                    transform: `translate(${qrCodeOffsetX}px, ${qrCodeOffsetY}px)`,
+                    transform: qrGroupTransform,
                 }}
             >
                 {/* Non-finder modules */}
                 <g className="qrRects">{qrRects}</g>
 
-                {/* Finder Patterns (not made clickable here, but possible) */}
-                <g className="finderPatterns">{finderPatterns}</g>
+                {finderRenderStyle === "classic" && (
+                    <g className="finderPatterns">{finderPatterns}</g>
+                )}
             </g>
 
             {/* Optional center image */}
@@ -942,7 +1410,7 @@ const CircularQRCode: React.FC<CircularQRCodeProps> = ({
                 <g
                     className="overlayImage"
                     style={{
-                        transform: `translate(${qrCodeOffsetX}px, ${qrCodeOffsetY}px)`,
+                        transform: qrGroupTransform,
                     }}
                 >
                     <image

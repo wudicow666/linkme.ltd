@@ -6,7 +6,11 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "offline:install": "cd offline && npm install",
+    "offline:build": "cd offline && npm run build",
+    "offline:preview": "cd offline && npm run preview",
+    "offline:preview:local": "cd offline && npm run preview:local"
   },
   "dependencies": {
     "@clerk/nextjs": "^6.20.0",

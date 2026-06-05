@@ -38,7 +38,7 @@ import {
     LayoutTemplate,
 } from 'lucide-react';
 
-import CircularQRCode from './CircularQRCode';
+import CircularQRCode, { type FinderRenderStyle } from './CircularQRCode';
 import TemplateManualComposer, {
     type ManualShellTransform,
 } from './TemplateManualComposer';
@@ -103,6 +103,8 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     // Finder pattern color logic
     const [finderPatternOption, setFinderPatternOption] = useState<'same' | 'solid'>('same');
     const [finderPatternColor, setFinderPatternColor] = useState('#000000');
+    const [finderRenderStyle, setFinderRenderStyle] = useState<FinderRenderStyle>('sparse560');
+    const [scanOptimized, setScanOptimized] = useState(true);
 
     // Outer border customization
     const [borderColor, setBorderColor] = useState('#000000');
@@ -111,7 +113,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
     // Additional customization
     const [showText, setShowText] = useState(true);
-    const [roundness, setRoundness] = useState(0);
+    const [roundness, setRoundness] = useState(100);
     const [finderRoundness, setFinderRoundness] = useState(0);
     const [opacityVariation, setOpacityVariation] = useState(0);
 
@@ -136,6 +138,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     // QR code info
     const [moduleSize, setModuleSize] = useState<number | null>(null);
     const [qrCodeSize, setQrCodeSize] = useState<number>(470);//700
+    const [qrCompactness, setQrCompactness] = useState<number>(90);
 
 
     const [qrTrimCircle, setQrTrimCircle] = useState(false);
@@ -148,8 +151,8 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
 
     const [shellTemplateId, setShellTemplateId] = useState<string>(NO_TEMPLATE);
     const [shellTransform, setShellTransform] = useState<ManualShellTransform>({
-        qrX: 371,
-        qrY: 358,
+        qrX: 368,
+        qrY: 344,
         qrDiameter: 324,
     });
     const [shellOverlay, setShellOverlay] = useState<ShellOverlayText>({
@@ -157,7 +160,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
     });
 
     // Export options
-    const [exportResolution, setExportResolution] = useState(1024);
+    const [exportResolution, setExportResolution] = useState(1280);
     const [exportFormat, setExportFormat] = useState<'png' | 'webp' | 'svg'>('png');
     const [exportComponent, setExportComponent] = useState<'full' | 'foreground' | 'background'>(
         'full'
@@ -254,6 +257,16 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             if (initialData.qrPalette !== undefined) setQrPalette(initialData.qrPalette as string[]);
             if (initialData.finderPatternOption !== undefined) setFinderPatternOption(initialData.finderPatternOption as 'same' | 'solid');
             if (initialData.finderPatternColor !== undefined) setFinderPatternColor(initialData.finderPatternColor as string);
+            if (initialData.finderRenderStyle !== undefined) {
+                setFinderRenderStyle(initialData.finderRenderStyle as FinderRenderStyle);
+            } else if (initialData.unifiedDotStyle !== undefined) {
+                setFinderRenderStyle(
+                    initialData.unifiedDotStyle ? 'unifiedDots' : 'classic'
+                );
+            }
+            if (initialData.scanOptimized !== undefined) {
+                setScanOptimized(initialData.scanOptimized as boolean);
+            }
             if (initialData.borderColor !== undefined) setBorderColor(initialData.borderColor as string);
             if (initialData.borderWidth !== undefined) setBorderWidth(initialData.borderWidth as number);
             if (initialData.canvasSize !== undefined) setCanvasSize(initialData.canvasSize as number);
@@ -270,6 +283,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             if (initialData.uploadedImageDataUrl !== undefined) setUploadedImageDataUrl(initialData.uploadedImageDataUrl as string | null);
             if (initialData.imageScale !== undefined) setImageScale(initialData.imageScale as number);
             if (initialData.qrCodeSize !== undefined) setQrCodeSize(initialData.qrCodeSize as number);
+            if (initialData.qrCompactness !== undefined) setQrCompactness(initialData.qrCompactness as number);
             if (initialData.qrTrimCircle !== undefined) setQrTrimCircle(initialData.qrTrimCircle as boolean);
             if (initialData.qrTrimCircleRadius !== undefined) setQrTrimCircleRadius(initialData.qrTrimCircleRadius as number);
             if (initialData.backgroundCoverage !== undefined) setBackgroundCoverage(initialData.backgroundCoverage as number);
@@ -352,6 +366,8 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             qrPalette,
             finderPatternOption,
             finderPatternColor,
+            finderRenderStyle,
+            scanOptimized,
             borderColor,
             borderWidth,
             canvasSize,
@@ -368,6 +384,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
             uploadedImageDataUrl,
             imageScale,
             qrCodeSize,
+            qrCompactness,
             qrTrimCircle,
             qrTrimCircleRadius,
             backgroundCoverage,
@@ -489,6 +506,8 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                 qrPalette={qrPalette}
                 finderPatternOption={finderPatternOption}
                 finderPatternColor={finderPatternColor}
+                finderRenderStyle={finderRenderStyle}
+                scanOptimized={scanOptimized}
                 showText={showText}
                 roundness={roundness}
                 opacityVariation={opacityVariation}
@@ -501,6 +520,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                 imageScale={imageScale}
                 moduleSize={moduleSize}
                 qrCodeSize={qrCodeSize}
+                qrCompactness={qrCompactness}
                 qrTrimCircle={qrTrimCircle}
                 qrTrimCircleRadius={qrTrimCircleRadius}
                 moduleCount={moduleCount}
@@ -648,6 +668,31 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                 />
                                                 <span className="w-16 text-right">{qrCodeSize}px</span>
                                             </div>
+                                        </div>
+
+                                        <div className="space-y-2">
+                                            <Label className="font-semibold">圆码紧凑度</Label>
+                                            <div className="flex items-center gap-4">
+                                                <Slider
+                                                    min={82}
+                                                    max={100}
+                                                    step={1}
+                                                    value={[qrCompactness]}
+                                                    onValueChange={(value) => setQrCompactness(value[0])}
+                                                    className="flex-1"
+                                                />
+                                                <span className="w-16 text-right">{qrCompactness}%</span>
+                                            </div>
+                                            <p className="text-xs text-muted-foreground">
+                                                缩小圆码、增大外圈点阵；实际直径约{' '}
+                                                {Math.round(qrCodeSize * qrCompactness / 100)}px
+                                                {qrCompactness < 85 && (
+                                                    <span className="text-amber-600">
+                                                        {' '}
+                                                        · 低于 85% 可能影响扫码，导出前请用微信试扫
+                                                    </span>
+                                                )}
+                                            </p>
                                         </div>
 
                                         <div className="flex items-center gap-2 mt-4">
@@ -907,7 +952,86 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                 ----------------------------- */}
                                 <TabsContent value="pattern">
                                     <div className="space-y-6">
+                                        <div className="space-y-3">
+                                            <h3 className="font-semibold text-lg">定位角样式</h3>
+                                            <div className="space-y-2">
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="radio"
+                                                        id="finderSparse560"
+                                                        name="finderRenderStyle"
+                                                        checked={finderRenderStyle === 'sparse560'}
+                                                        onChange={() => setFinderRenderStyle('sparse560')}
+                                                    />
+                                                    <Label htmlFor="finderSparse560" className="cursor-pointer">
+                                                        560 定位角（推荐，试验）
+                                                    </Label>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="radio"
+                                                        id="finderCross"
+                                                        name="finderRenderStyle"
+                                                        checked={finderRenderStyle === 'cross'}
+                                                        onChange={() => setFinderRenderStyle('cross')}
+                                                    />
+                                                    <Label htmlFor="finderCross" className="cursor-pointer">
+                                                        十字（弱化外框，更稳扫码）
+                                                    </Label>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="radio"
+                                                        id="finderUnifiedDots"
+                                                        name="finderRenderStyle"
+                                                        checked={finderRenderStyle === 'unifiedDots'}
+                                                        onChange={() => setFinderRenderStyle('unifiedDots')}
+                                                    />
+                                                    <Label htmlFor="finderUnifiedDots" className="cursor-pointer">
+                                                        圆点方框
+                                                    </Label>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <input
+                                                        type="radio"
+                                                        id="finderClassic"
+                                                        name="finderRenderStyle"
+                                                        checked={finderRenderStyle === 'classic'}
+                                                        onChange={() => setFinderRenderStyle('classic')}
+                                                    />
+                                                    <Label htmlFor="finderClassic" className="cursor-pointer">
+                                                        经典三层方块
+                                                    </Label>
+                                                </div>
+                                            </div>
+                                            {finderRenderStyle === 'sparse560' && (
+                                                <div className="flex items-start gap-2 rounded-md border border-dashed p-3">
+                                                    <Switch
+                                                        checked={scanOptimized}
+                                                        onCheckedChange={setScanOptimized}
+                                                        id="scanOptimized"
+                                                    />
+                                                    <div className="space-y-1">
+                                                        <Label
+                                                            htmlFor="scanOptimized"
+                                                            className="cursor-pointer font-semibold"
+                                                        >
+                                                            扫一扫优化（推荐）
+                                                        </Label>
+                                                        <p className="text-xs text-muted-foreground">
+                                                            定位角保持十字 + 四边各 3 点，仅额外补四个角点与中等强度对齐块，兼顾微信/抖音扫一扫；关闭后更接近纯
+                                                            560 空定位（抖音可能扫不出）。
+                                                        </p>
+                                                    </div>
+                                                </div>
+                                            )}
+                                            <p className="text-sm text-gray-500">
+                                                560 定位角：仅中心十字 + 四边各 3 点，其余留白；请勿选「十字（弱化外框）」或「经典方块」。
+                                            </p>
+                                        </div>
+
                                         {/* FINDER PATTERN COLOR */}
+                                        {finderRenderStyle === 'classic' && (
                                         <div className="space-y-2">
                                             <h3 className="font-semibold text-lg">定位角</h3>
                                             <div className="flex items-center gap-4">
@@ -950,6 +1074,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                 </div>
                                             )}
                                         </div>
+                                        )}
 
                                         {/* RECT SCALE */}
                                         <div className="space-y-2">
@@ -1029,6 +1154,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                         </div>
 
                                         {/* FINDER PATTERN ROUNDNESS */}
+                                        {finderRenderStyle === 'classic' && (
                                         <div className="space-y-2">
                                             <Label className="font-semibold">定位角圆角</Label>
                                             <Slider
@@ -1039,6 +1165,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                 onValueChange={(value) => setFinderRoundness(value[0])}
                                             />
                                         </div>
+                                        )}
 
                                         {/* OPACITY VARIATION */}
                                         <div className="space-y-2">
@@ -1580,7 +1707,7 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     )}
                                                 </div>
                                                 <p className="text-sm text-muted-foreground">
-                                                    在左侧预览中拖动圆码、用滑块调整大小，再点「导出」保存合成海报。
+                                                    在左侧预览中拖动圆码，或在预览下方输入 X/Y 位置与直径数值，再点「导出」保存合成海报。
                                                     建议先在「基础」里开启「裁成圆形」。
                                                 </p>
                                             </>
@@ -1658,6 +1785,10 @@ const QRCodeGenerator: React.FC<QRCodeGeneratorProps> = ({
                                                     {saving ? '保存中…' : (isEditing ? '更新二维码' : '保存二维码')}
                                                 </Button>
                                             )}
+
+                                            <p className="text-xs text-muted-foreground">
+                                                用于抖音/微信扫一扫：建议 PNG、分辨率 ≥1280，保存到相册后从扫一扫选图识别（聊天发图不保证）。
+                                            </p>
 
                                             <Button
                                                 onClick={handleExport}

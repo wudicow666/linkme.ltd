@@ -127,6 +127,21 @@ export async function downloadFile(
 
   try {
     const blob = dataUrlToBlob(dataUrl);
+
+    if (typeof navigator !== "undefined" && navigator.share) {
+      try {
+        const file = new File([blob], filename, { type: blob.type });
+        if (navigator.canShare?.({ files: [file] })) {
+          await navigator.share({ files: [file], title: filename });
+          return { status: "saved" };
+        }
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          return { status: "cancelled" };
+        }
+      }
+    }
+
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;

@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1 --port 5173",
+    "preview": "vite preview --host 0.0.0.0 --port 5173",
+    "preview:local": "vite preview --host 127.0.0.1 --port 5173",
     "generate": "tsx scripts/render-circular-svg.ts",
     "generate:browser": "tsx scripts/generate-circular.ts"
   },

@@ -18,6 +18,10 @@ function clampDiameter(value: number): number {
   return Math.min(QR_DIAMETER_MAX, Math.max(QR_DIAMETER_MIN, Math.round(value)));
 }
 
+function clampCoord(value: number, max: number): number {
+  return Math.min(max, Math.max(0, Math.round(value)));
+}
+
 export type ManualShellTransform = {
   qrX: number;
   qrY: number;
@@ -206,6 +210,52 @@ const TemplateManualComposer: React.FC<Props> = ({
             </div>
           </div>
         </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-2">
+            <Label>水平位置 X（模板像素）</Label>
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                min={0}
+                max={template.width}
+                step={1}
+                value={Math.round(qrX)}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (!Number.isFinite(n)) return;
+                  onTransformChange({
+                    ...transform,
+                    qrX: clampCoord(n, template.width),
+                  });
+                }}
+                className="w-full h-9 text-right tabular-nums"
+              />
+              <span className="text-sm text-gray-600 shrink-0">px</span>
+            </div>
+          </div>
+          <div className="space-y-2">
+            <Label>垂直位置 Y（模板像素）</Label>
+            <div className="flex items-center gap-1">
+              <Input
+                type="number"
+                min={0}
+                max={template.height}
+                step={1}
+                value={Math.round(qrY)}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  if (!Number.isFinite(n)) return;
+                  onTransformChange({
+                    ...transform,
+                    qrY: clampCoord(n, template.height),
+                  });
+                }}
+                className="w-full h-9 text-right tabular-nums"
+              />
+              <span className="text-sm text-gray-600 shrink-0">px</span>
+            </div>
+          </div>
+        </div>
         <Button
           type="button"
           variant="outline"
@@ -221,7 +271,7 @@ const TemplateManualComposer: React.FC<Props> = ({
           重置位置与大小
         </Button>
         <p className="text-xs text-gray-500">
-          在预览图上按住圆码拖动；用滑块或直接输入像素值调整大小。对准模板留白/圆环后导出 PNG。
+          在预览图上拖动圆码，或用下方数值调整位置（X/Y 为圆心在模板上的坐标）与大小。对准留白/圆环后导出 PNG。
         </p>
       </div>
     </div>

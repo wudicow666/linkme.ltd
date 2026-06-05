@@ -11,6 +11,7 @@ function readQueryInitialData(): Record<string, unknown> | undefined {
     qrTrimCircle: true,
     qrTrimCircleRadius: 235,
     qrCodeSize: 470,
+    qrCompactness: 90,
     canvasSize: 1000,
     borderWidth: 10,
     borderColor: "#000000",
@@ -18,7 +19,9 @@ function readQueryInitialData(): Record<string, unknown> | undefined {
     bgOption: "solid",
     bgColor: "#ffffff",
     qrColor: "#000000",
-    roundness: 0,
+    roundness: 100,
+    finderRenderStyle: "sparse560",
+    scanOptimized: true,
     finderRoundness: 0,
     opacityVariation: 0,
     showText: false,
@@ -43,9 +46,9 @@ export default function App() {
   return (
     <div className="min-h-screen bg-gray-100">
       <header className="border-b bg-white px-4 py-3 text-center shadow-sm">
-        <h1 className="text-lg font-semibold text-gray-900">离线二维码生成器</h1>
+        <h1 className="text-lg font-semibold text-gray-900">圆形二维码生成器</h1>
         <p className="mt-1 text-sm text-gray-500">
-          无需登录、无需联网；生成与导出均在本地浏览器完成
+          网页版 · 无需登录；生成与导出均在浏览器本地完成（手机可保存到相册）
         </p>
       </header>
       <main>
