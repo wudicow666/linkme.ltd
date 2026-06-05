@@ -27,10 +27,11 @@ jobs:
           cache-dependency-path: offline/package-lock.json
 
       - name: Install and build
-        working-directory: offline
         env:
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
         run: |
+          npm ci
+          cd offline
           npm ci
           npm run build
 
